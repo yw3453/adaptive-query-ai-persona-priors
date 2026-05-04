@@ -1,0 +1,68 @@
+# -----------------------------------------------------------------------------
+# macOS
+# -----------------------------------------------------------------------------
+.DS_Store
+**/.DS_Store
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# -----------------------------------------------------------------------------
+# Virtual environments / package managers
+# -----------------------------------------------------------------------------
+.venv/
+venv/
+env/
+.python-version
+
+# -----------------------------------------------------------------------------
+# Editors / IDEs
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# -----------------------------------------------------------------------------
+# Jupyter
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# -----------------------------------------------------------------------------
+# Experiment outputs
+# -----------------------------------------------------------------------------
+output/
+outputs/
+
+# -----------------------------------------------------------------------------
+# Data files that are NOT redistributed with this repository.
+#
+# - The raw WVS Cross-National Wave 7 csv is distributed only under a
+#   WVS consent form; do not commit it to the public repo.
+# - worldvalues_real.csv is WVS-derived and must be reconstructed locally
+#   by running pre-process/prepare_worldvalues_data.py.
+# - pre-process/WorldValuesBench/ is an intermediate folder produced by that
+#   script.
+# -----------------------------------------------------------------------------
+pre-process/dataset_construction/WVS_Cross-National_Wave_7_csv_*.csv
+pre-process/WorldValuesBench/
+data/WorldValuesBench/worldvalues_real.csv
+

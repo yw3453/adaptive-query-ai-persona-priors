@@ -1,0 +1,287 @@
+# =============================================================================
+# Synthetic Experiment Configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Source Dataset (for loading personas)
+# -----------------------------------------------------------------------------
+dataset:
+  name: "WorldValuesBench"  # Options: "WorldValuesBench"
+  n_categories: 4  # Number of response categories
+  train_ratio: 0.8
+  
+  # Evaluation mode:
+  # - "disjoint": Feasible and target questions are disjoint
+  # - "overlapping": All questions are both feasible and target
+  evaluation_mode: "disjoint"
+  
+  target_questions:
+    mode: "random_n"  # Options: "last_n", "explicit", "random_n" (only for disjoint mode)
+    n: 5
+  
+  # Sample a subset of questions (useful for entropy_target in overlapping mode)
+  # When enabled, samples n questions from the full question set BEFORE splitting
+  # into feasible/target. This makes entropy_target/variance_target tractable since
+  # their computational cost scales as O(Q^2) where Q = number of questions.
+  # Recommendation: n <= 15 for reasonable runtime with entropy_target.
+  sample_questions:
+    enabled: false
+    n: 15  # Number of questions to sample
+  
+  # Persona simulation layer: controls how persona response models are loaded.
+  # - mode: "distribution" uses worldvalues_simulated.csv directly.
+  # - mode: "deterministic_epsilon" uses deterministic answers and converts each
+  #   answer into a categorical distribution:
+  #     P(answer=det) = 1 - epsilon
+  #     P(answer!=det) = epsilon / (K - 1)
+  # - temperature: optional post-processing on persona distributions for both modes
+  #     p_tau(k) ∝ p(k)^(1 / temperature)
+  #     temperature < 1.0 => sharper, temperature > 1.0 => smoother
+  persona_simulation:
+    mode: "distribution"  # Options: "distribution", "deterministic_epsilon"
+    epsilon: 0.05         # Used only for deterministic_epsilon mode; must be in [0, 1]
+    temperature: 1.0      # Positive; applied in both modes
+    distribution_file: "worldvalues_simulated.csv"
+    deterministic_file: "worldvalues_simulated_deterministic.csv"
+    answer_index_base: "auto"  # Options: "auto", 0, 1
+
+# -----------------------------------------------------------------------------
+# Synthetic User Generation
+# -----------------------------------------------------------------------------
+synthetic:
+  # Number of synthetic users to generate
+  n_users: 100000
+  
+  # Generation mode
+  # Options:
+  #   - "pure_uniform": Each user = 1 persona, sampled uniformly
+  #   - "pure_weighted": Each user = 1 persona, sampled from learned prior
+  #   - "mixture_sparse": Each user = mixture of K personas
+  #   - "mixture_dirichlet": Each user = mixture with Dirichlet-sampled weights
+  generation_mode: "pure_uniform"
+  
+  # Mixture parameters (used for mixture_sparse and mixture_dirichlet modes)
+  mixture:
+    n_components: 3           # Number of personas per user (for mixture_sparse)
+    dirichlet_alpha: 0.5      # Concentration parameter (lower = sparser mixture)
+  
+  # Missing data model
+  missing:
+    mode: "none"              # Options: "none", "rate", "fixed_count"
+    rate: 0.1                 # Probability each question is missing (for mode="rate")
+    fixed_count: 80           # Number of answered questions per user (for mode="fixed_count")
+  
+  # Save ground truth (true personas and mixture weights)
+  save_ground_truth: true
+
+# -----------------------------------------------------------------------------
+# Empirical Bayes Prior Learning
+# -----------------------------------------------------------------------------
+# For pure_weighted mode, learn prior from real training users
+empirical_bayes:
+  enabled: false
+  source: "real"              # "real" = learn from real users in the dataset
+  max_iter: 100
+  tol: 0.0001
+
+# -----------------------------------------------------------------------------
+# Persona Clustering
+# -----------------------------------------------------------------------------
+# Cluster personas into prototypes to reduce dimensionality
+# Requires empirical_bayes.enabled = true (uses learned prior for clustering)
+clustering:
+  enabled: false          # Whether to cluster personas into prototypes
+  
+  # Number of clusters (prototypes)
+  n_clusters: null        # null = auto-select via validation, or specify integer
+  n_clusters_range: [10, 100]  # Range to search if n_clusters is null
+  n_clusters_step: 10     # Step size for K search
+  
+  # Pruning low-weight personas before clustering
+  prune_threshold: 0.001  # Remove personas with prior weight < this
+  min_personas: 10        # Keep at least this many personas
+  
+  # Clustering method
+  method: "weighted_kmeans"  # Options: "weighted_kmeans", "hierarchical"
+  
+  # Assignment type
+  assignment: "hard"      # Options: "hard", "soft"
+  soft_temperature: 1.0   # Temperature for soft assignment (lower = harder)
+
+# -----------------------------------------------------------------------------
+# Query Budget
+# -----------------------------------------------------------------------------
+# Maximum number of questions the adaptive policy is allowed to ask per user.
+#
+# Effective-budget cap: an effective budget is enforced at runtime as
+#     effective_budget = min(budget, |feasible_questions|).
+# Anything larger than |feasible_questions| is silently clamped down to it.
+# With the default settings in this file
+# (evaluation_mode: "disjoint", target_questions.n: 5, and WorldValuesBench's
+# 91 filtered questions), |feasible_questions| = 91 - 5 = 86, so any budget
+# above 86 behaves identically to budget = 86.
+#
+# Note: in overlapping mode, budget must also stay strictly below the total
+# number of questions so at least one unasked question remains to evaluate.
+budget: 86
+
+# -----------------------------------------------------------------------------
+# Methods to Run
+# -----------------------------------------------------------------------------
+methods:
+  greedy: true
+  random: true           # Adaptive random: selects questions one at a time randomly
+  random_fixed: true     # Fixed random: uniformly random fixed set for all users
+  nonadaptive: true      # Fixed set selected by greedy entropy
+  full: true             # Use all feasible questions
+  cat: true
+
+# -----------------------------------------------------------------------------
+# Greedy Method Configuration
+# -----------------------------------------------------------------------------
+greedy:
+  # objective_type: Which objective function to use for greedy question selection
+  # Options:
+  #   - "entropy_target": Minimize entropy over TARGET question predictions (recommended)
+  #     Selects questions that most reduce uncertainty about target question predictions.
+  #   - "entropy_persona": Minimize entropy over the PERSONA posterior
+  #     Selects questions that most reduce overall persona uncertainty.
+  #   - "variance_target": Minimize variance over TARGET question predictions
+  #     Similar to entropy_target but uses variance instead of entropy.
+  #   - "variance_persona": Minimize variance-like measure over persona posterior
+  #     Similar to entropy_persona but uses Gini impurity (1 - sum(p^2)).
+  #   - "crps_target": Minimize CRPS uncertainty over TARGET question predictions
+  #     Ordinal-aware: appropriate for ratings data where category ordering matters.
+  #     CRPS uncertainty = Σ_k F(k) * (1 - F(k)) where F is the CDF.
+  # "entropy_target" is usually best; "crps_target" is better for ordinal data like ratings.
+  objective_type: "entropy_target"
+  
+  # use_optimized: Whether to use the vectorized/optimized greedy implementation
+  # Options:
+  #   - true: Use fast vectorized implementation (recommended)
+  #     Precomputes persona probability matrices for O(1) lookups.
+  #   - false: Use naive loop-based implementation (slower, for debugging)
+  use_optimized: true
+  
+  # n_jobs: Number of parallel jobs for greedy computation
+  # Options:
+  #   - -1: Use all available CPU cores (fastest)
+  #   - 1: Sequential processing (useful for debugging or memory constraints)
+  #   - N: Use N parallel workers
+  n_jobs: -1
+
+# -----------------------------------------------------------------------------
+# Posterior Sparsification Configuration
+# -----------------------------------------------------------------------------
+# Sparsification reduces the number of active personas in the posterior after
+# each Bayesian update. This can improve computational efficiency and potentially
+# act as regularization. The sparsification is applied AFTER the full posterior
+# update (so information gain computation uses full posterior).
+#
+# Methods:
+#   - "top_p": Keep smallest set of personas covering top_p fraction of probability
+#              mass. Adaptive: keeps more when uncertain, fewer when confident.
+#   - "top_k": Keep exactly top_k personas with highest probability.
+#
+posterior_sparsification:
+  # Whether to enable posterior sparsification
+  enabled: false
+  
+  # Sparsification method: "top_p" (recommended) or "top_k"
+  method: "top_p"
+  
+  # For method="top_p": cumulative probability threshold (0 < top_p <= 1)
+  # Higher values = more personas retained = more conservative
+  # Recommended: 0.95-0.99
+  top_p: 0.99
+  
+  # For method="top_k": fixed number of personas to keep
+  # Only used when method="top_k"
+  top_k: 100
+  
+  # Minimum number of personas to keep regardless of method
+  # Safety floor to prevent aggressive pruning
+  min_k: 10
+  
+  # Burn-in period: don't sparsify until after this many questions
+  # Early posteriors are often flat, so aggressive pruning could eliminate
+  # the true persona before enough evidence accumulates
+  burn_in_steps: 5
+
+# -----------------------------------------------------------------------------
+# Non-Adaptive Set Configuration
+# -----------------------------------------------------------------------------
+nonadaptive:
+  selection_criterion: "entropy_target"
+
+# -----------------------------------------------------------------------------
+# CAT Configuration
+# -----------------------------------------------------------------------------
+# Computerized Adaptive Testing baselines based on Item Response Theory.
+# 
+# Available models:
+#   1D Models (in cat.py):
+#     - "grm": Graded Response Model - cumulative probability model
+#     - "gpcm": Generalized Partial Credit Model - adjacent category transitions
+#   
+#   Multidimensional Models (in cat_mirt.py):
+#     - "mgrm": Multidimensional GRM - D-dimensional latent trait
+#     - "mgpcm": Multidimensional GPCM - D-dimensional latent trait
+# -----------------------------------------------------------------------------
+cat:
+  # Which CAT models to run. Set to true to enable.
+  models:
+    grm: true      # 1D Graded Response Model (existing)
+    gpcm: true     # 1D Generalized Partial Credit Model
+    mgrm: true     # Multidimensional GRM
+    mgpcm: true    # Multidimensional GPCM
+  
+  # Selection criterion for item selection
+  # For 1D models: "mfi" (Max Fisher Info) or "mepv" (Min Expected Posterior Variance)
+  # For MIRT: "d_opt" (D-optimality) or "a_opt" (A-optimality) or "kl" (KL divergence)
+  criterion_1d: "mepv"
+  criterion_mirt: "a_opt"
+  
+  # Grid parameters
+  grid_range: 4.0         # Range for θ: [-grid_range, grid_range]
+  n_grid_points_1d: 41    # Grid points for 1D models
+  n_grid_points_mirt: 9  # Grid points per dimension for MIRT (total = G^D)
+  
+  # Number of latent dimensions for MIRT models
+  # Higher D = more expressive but slower (grid size grows as G^D)
+  # Recommended: 2-3 for interpretability, max 4 for computational feasibility
+  n_dimensions: 3
+  
+  # EM fitting parameters
+  max_iter: 50
+  tol: 0.001
+  n_jobs: 4  # Parallel jobs (-1 = all cores)
+
+# -----------------------------------------------------------------------------
+# Prediction Configuration
+# -----------------------------------------------------------------------------
+prediction:
+  # Temperature scaling for posterior predictive distributions
+  # p_τ(y) ∝ p(y)^{1/τ}
+  # τ = 1.0: No scaling (original distribution)
+  # τ > 1.0: Softer/more uniform distribution
+  temperature: 1.0
+  
+  # Score values for posterior mean MSE computation
+  # Set to null to use category indices [0, 1, ..., K-1]
+  score_values: null
+  
+  # Confidence level for CI coverage metric
+  ci_confidence_level: 0.50
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  dir: "output"
+  prefix: "synthetic"
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+verbose: true
